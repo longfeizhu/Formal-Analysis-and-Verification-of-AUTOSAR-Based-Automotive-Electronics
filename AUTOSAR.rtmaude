@@ -1,0 +1,226 @@
+in real-time-maude.maude
+
+(tmod SCHEDULE-LOGIC is pr NAT .
+   pr QID .
+
+   sorts Action Schedule .
+   subsort Action < Schedule .
+
+   op #_@_ : Nat Qid -> Action [ctor prec 1] .
+
+   op nil : -> Schedule [ctor] .
+   op _;_ : Schedule Schedule -> Schedule [ctor id: nil gather (e E) prec 5] .
+
+endtm)
+
+--- MONITOR is implemented as a multiset. 
+
+(tmod MONITOR is pr NAT .
+   pr QID .
+   pr BOOL .
+
+   sort Element Monitor .
+   subsort Element < Monitor .
+
+   op <_`,_> : Qid Nat -> Element [prec 1] .                       --- The id of the task and its timeframe
+
+   op * : -> Monitor [ctor].                                       --- * as the identity of the multiset
+   op _|_ : Monitor Monitor -> Monitor [ctor comm assoc id: *] .
+
+   op isMonitored`(_`,_`) : Qid Monitor -> Bool .                  --- to check whether a task is already in the monitor
+
+   var id : Qid .
+   var q : Qid .
+   var tf : Nat .
+   var M : Monitor .
+
+   eq < q,0 > = * .                                                --- letting it be * will make it out of the monitor
+
+   eq isMonitored(id,*) = false .                                  --- define isMonitored recursively
+   ceq isMonitored(id,< q,tf > | M) = isMonitored(id, M) if id =/= q .
+   eq isMonitored(id,M) = true [owise] .
+
+   op MonitorOne`(_`) : Monitor -> Monitor .                       --- decrease time frames of the tasks in the monitor
+   ceq MonitorOne(< q, s tf > | M) = < q,tf > | MonitorOne(M) if tf >= 1 .
+   eq MonitorOne(< q,1 > | M) = MonitorOne(M) .
+   eq MonitorOne(*) = * .
+
+endtm)
+
+(tmod ACTIVE-QUEUE is pr NAT .
+   pr QID .
+
+   sort QueueElement ActiveQueue .
+
+   op none : -> QueueElement [ctor] .
+   op `[_`,_`,_`,_`] : Qid Nat Nat Nat -> QueueElement [ctor] .    --- [id, priority, timeToExec, timeToDeadline]
+
+   op id`(_`) : QueueElement -> Qid .
+   op priority`(_`) : QueueElement -> Nat .
+   op exec`(_`) : QueueElement -> Nat .
+   op deadline`(_`) : QueueElement -> Nat .
+
+   vars p e d : Nat .
+   var id : Qid .
+
+   eq id([id,p,e,d]) = id .
+   eq priority([id,p,e,d]) = p .
+   eq exec([id,p,e,d]) = e .
+   eq deadline([id,p,e,d]) = d .
+
+   op null : -> ActiveQueue [ctor] .
+
+   op _:_ : QueueElement ActiveQueue ~> ActiveQueue .
+
+   op insert`(_`,_`) : QueueElement ActiveQueue -> ActiveQueue .
+   op getFirst`(_`) : ActiveQueue -> QueueElement .
+   op deleteFirst`(_`) : ActiveQueue -> ActiveQueue .
+
+   vars E F : QueueElement .
+   var Q : ActiveQueue .
+
+   mb (E : null) : ActiveQueue .
+   cmb (E : F : Q) : ActiveQueue if priority(E) >= priority(F) /\ (F : Q) : ActiveQueue .
+
+   eq insert(E,null) = E : null .
+   ceq insert(E, (F : Q)) = E : F : Q if priority(E) > priority(F) .
+   eq insert(E, (F : Q)) = F : insert(E,Q) [owise] .
+
+   eq getFirst(E : Q) = E .
+
+   eq deleteFirst(null) = null .
+   eq deleteFirst(E : Q) = Q .
+
+   op deadlineOne`(_`) : ActiveQueue -> ActiveQueue .                --- decrease the time to deadline by one
+   eq deadlineOne(null) = null .
+   eq deadlineOne([id,p,e,s(d)] : Q) = [id,p,e,d] : deadlineOne(Q) .
+   eq deadlineOne([id,p,e,0] : Q) = [id,p,e,0] : deadlineOne(Q) .
+
+endtm)
+
+(tmod STATICINFO is pr ACTIVE-QUEUE .
+   pr MONITOR .
+
+   sorts Task ISRs Tasks StaticInfo .
+   subsort Task < ISRs Tasks .
+   op `(_`,_`,_`,_`,_`,_`) : Qid Nat Nat Nat Nat Nat -> Task [ctor] .   ---- id priority executionTime deadline budget timeframe
+
+   op idle : -> Tasks [ctor] .
+   op no : -> ISRs [ctor] .
+   op _`[`]_ : Tasks Tasks -> Tasks [ctor assoc comm id: idle] .
+   op _^_ : ISRs ISRs -> ISRs [ctor assoc comm id: no] .
+
+   op `{_`,_`,_`} : Tasks ISRs Nat -> StaticInfo [ctor] .
+
+   op getTask`(_`,_`) : Qid Tasks -> QueueElement .
+   op getMonitor`(_`,_`) : Qid Tasks -> Element .
+
+   vars n q : Qid .
+   vars pri exec dead budget tf : Nat .
+   var Tasks : Tasks .
+
+   ceq getTask(n,(q,pri,exec,dead,budget,tf) [] Tasks) = [q,pri,exec,dead] if q = n .
+   eq getTask(n,(q,pri,exec,dead,budget,tf) [] Tasks) = getTask(n,Tasks) [owise] .
+
+   ceq getMonitor(n,(q,pri,exec,dead,budget,tf) [] Tasks) = < q,tf > if q = n .
+   eq getMonitor(n,(q,pri,exec,dead,budget,tf) [] Tasks) = getMonitor(n,Tasks) [owise] .
+
+endtm)
+
+(tmod TRACE is pr QID .
+   pr NAT-TIME-DOMAIN .
+   sorts Event Trace .
+   subsort Event < Trace .
+
+   op idle : -> Event [ctor] .
+   op run`(_`) : Qid -> Event [ctor] .
+   op ISR`(_`) : Qid -> Event [ctor] .
+   op activate`(_`) : Qid -> Event [ctor] .
+
+   op nnil : -> Trace [ctor] .
+   op _^_ : Trace Trace -> Trace [ctor assoc id: nnil] .
+
+endtm)
+
+(tmod MAIN is pr NAT-TIME-DOMAIN .
+   pr ACTIVE-QUEUE .
+   pr SCHEDULE-LOGIC .
+   pr MONITOR .
+   pr STATICINFO .
+   pr TRACE .
+
+   sort Context ContextWithTrace .
+   subsort ContextWithTrace < System .
+   op _`,_ : Context Trace -> ContextWithTrace [ctor] .
+
+   op DEADLINEMISS : Qid -> Context [ctor] .            --- a special configuration to flag one task miss its deadline
+   op _`,_`,_`,_ : ActiveQueue Schedule Monitor StaticInfo -> Context [ctor] .
+   op `[_`] : Context -> Context .                --- a special configuration to flag that a task fails to be activated,
+                                                              --- that is to say when schedule logic to activate it, it is still in the monitor
+
+   var id task itr : Qid .
+   vars p e d b tf iFlag : Nat .
+   var Ts : Tasks .
+   vars Is Is1 Is2 : ISRs .
+   var Q : ActiveQueue .
+   var Sch : Schedule .
+   var M : Monitor .
+   var C : StaticInfo .
+   var n : Nat .
+   var trace : Trace .
+
+---- there are five kinds of tick rules to let time advance by one
+
+   crl [Time1] : { [id,p,s(e),s(d)] : Q , (#(s n) @ task) ; Sch , M , {Ts,Is,1}, trace } 
+              => { [id,p,e,d] : deadlineOne(Q) , (# n @ task) ; Sch , MonitorOne(M) , {Ts,Is,0} , trace ^ run(id) } in time 1 if e >= 1 .
+
+   crl [Time2] : { [id,p,s(e),s(d)] : Q , nil , M , {Ts,Is,1} , trace }
+              => { [id,p,e,d] : deadlineOne(Q) , nil , MonitorOne(M) , {Ts,Is,0} , trace ^ run(id) } in time 1 if e >= 1 .
+
+   rl  [Time3] : { [id,p,1,s(d)] : Q , (#(s n) @ task) ; Sch , M , {Ts,Is,1} , trace }
+              => { deadlineOne(Q) , (# n @ task) ; Sch , MonitorOne(M) , {Ts,Is,0} ,trace ^ run(id) } in time 1 .
+
+   rl  [Time4] : { [id,p,1,s(d)] : Q , nil , M , {Ts,Is,1} , trace }
+              => { deadlineOne(Q) , nil , MonitorOne(M) , {Ts,Is,0} , trace ^ run(id) } in time 1 .
+
+   rl  [Time5] : { null , (#(s n) @ task) ; Sch , M , {Ts,Is,1} , trace }
+              => { null , (# n @ task) ; Sch , MonitorOne(M) , {Ts,Is,0} , trace ^ idle } in time 1 .
+
+---- the task miss its deadline, when the time to deadline is already 0 while its time to execution is not
+
+   rl  [DeadlineMiss] : { [id,p,s(e),0] : Q , Sch , M , C , trace } => {DEADLINEMISS(id) , trace} .
+
+---- success to activate a task
+
+   crl [Activate1] : { Q , (# 0 @ task) ; Sch , M , {Ts,Is,iFlag} , trace }
+                 => { insert(getTask(task,Ts),Q) , Sch , (getMonitor(task,Ts) | M) , {Ts,Is,iFlag} , trace ^ activate(task) } if not isMonitored(task,M) .
+
+---- fail to activate a task, flagging it as the special configuration
+---- and then make it continue to execute
+
+   crl [Activate2] : { Q , (# 0 @ task) ; Sch , M , {Ts,Is,iFlag} , trace }
+                 => {[ Q , (# 0 @ task) ; Sch , M , {Ts,Is,iFlag} ], trace } if isMonitored(task,M) .
+
+   rl  [Omit] : {[Q,(# 0 @ task) ; Sch,M,{Ts,Is,iFlag}] , trace} => {Q,Sch,M,{Ts,Is,iFlag} , trace} .
+
+
+   crl [Interrupt1] : { Q , (# n @ task) ; Sch , M ,
+                        {Ts,Is1 ^ (itr,p,e,d,b,tf) ^ Is2,0} , trace }     ---- any defined ISR can be received
+                   => { insert([itr,p,e,d],Q) ,          ---- put the received ISR into the active queue
+                        (# n @ task) ; Sch ,           ---- the ISR is received before any schedule action takes place as n >= 1
+                        (< itr,tf > | M) ,          ---- put the received ISR and its time frame into the monitor
+                        {Ts,Is1 ^ (itr,p,e,d,b,tf) ^ Is2,1} , trace ^ ISR(itr) }      ---- set the iFlag indicating whether an ISR is received to 1
+                   if n >= 1 /\ not isMonitored(itr,M) .
+
+   crl [Interrupt2] : { Q , nil , M ,
+                        {Ts,Is1 ^ (itr,p,e,d,b,tf) ^ Is2,0} , trace }
+                   => { insert([itr,p,e,d],Q) ,
+                        nil , (< itr,tf > | M) , 
+                        {Ts,Is1 ^ (itr,p,e,d,b,tf) ^ Is2,1} , trace ^ ISR(itr) } 
+                   if not isMonitored(itr,M) .
+
+   rl  [NoInterrupt] : { Q , Sch , M ,
+                         {Ts,Is,0}  , trace }  ---- any defined ISR can be received
+                   => { Q ,     ---- no ISR is received
+                        Sch , M ,
+                        {Ts,Is,1} , trace } .   ---- set the iFlag to 1 indicating whether to received an ISR has been decided
